@@ -114,7 +114,7 @@ async def track_channel_posts(post: Message):
     save_post_to_db(chat_id, author_name)
 
 
-# ----------------- ОБРАБОТЧИК СООБЩЕНИЙ В ЛИЧКЕ БОТА -----------------
+# ----------------- ОБРАБОТЧИКИ КНОПОК И КОМАНД -----------------
 
 @dp.message(F.text == "/start")
 async def cmd_start(message: Message):
@@ -124,14 +124,14 @@ async def cmd_start(message: Message):
     welcome_text = (
         "Я считаю, сколько постов опубликовал каждый админ твоих каналов.\n"
         "Как подключить канал:\n"
-        "1. Добавь меня в канал администратором\n"
+        "<blockquote>1. Добавь меня в канал администратором\n"
         "2. Включи в канале «Подписывать сообщения» - иначе я не вижу автора\n"
-        "• Все - новые посты считаются сами\n\n"
+        "• Все - новые посты считаются сами</blockquote>\n\n"
         "Считаются только посты, опубликованные после добавления бота. Посты без подписи идут как \"От лица канала\"\n\n"
-        "Бот делается одним человеком с помощью ии, я вообще нихуя не разбираюсь в кодах, но у меня нет возможности платить людям за разработку и помощь😭. Так что некоторое время бот будет сырым, если я вообще не забью хуй на его разработку.\n\n"
-        "OWNER - штурвал"
+        "<blockquote>Бот делается одним человеком с помощью ии, я вообще нихуя не разбираюсь в кодах, но у меня нет возможности платить людям за разработку и помощь😭. Так что некоторое время бот будет сырым, если я вообще не забью хуй на его разработку.</blockquote>\n\n"
+        "<blockquote>OWNER - штурвал</blockquote>"
     )
-    await message.answer(welcome_text, reply_markup=main_menu_keyboard)
+    await message.answer(welcome_text, parse_mode="HTML", reply_markup=main_menu_keyboard)
 
 @dp.message(F.text == "📊 Статистика каналов")
 async def show_channels_menu(message: Message):
@@ -141,11 +141,11 @@ async def show_channels_menu(message: Message):
     channels = get_user_channels()
 
     if not channels:
-        await message.answer(
-            "...у меня пока нет данных ни по одному каналу.\n"
-            "Убедитесь, что вы добавили бота в канал, выдали ему права администратора и в нем появились новые посты.",
-            reply_markup=main_menu_keyboard
+        empty_text = (
+            "<blockquote>...у меня пока нет данных ни по одному каналу.\n"
+            "Убедитесь, что вы добавили бота в канал, выдали ему права администратора и в нем появились новые посты.</blockquote>"
         )
+        await message.answer(empty_text, parse_mode="HTML", reply_markup=main_menu_keyboard)
         return
 
     keyboard = get_channels_keyboard(channels)
@@ -162,25 +162,31 @@ async def show_support(message: Message):
 
     support_text = (
         "В качестве поддержки, вы можете отправить любое количество звезд данному человеку: @Yugo_Kanno\n"
-        "Все отправленные звезды идут на поддержку бота!"
+        "<blockquote>Все отправленные звезды идут на поддержку бота!</blockquote>"
     )
-    await message.answer(support_text, reply_markup=main_menu_keyboard)
+    await message.answer(support_text, parse_mode="HTML", reply_markup=main_menu_keyboard)
 
 @dp.message(F.text == "💡 Помощь")
 async def show_help(message: Message):
+    if message.chat.type != "private":
+        return
+
     help_text = (
-        "Появились вопросы? Вы можете задать их @Yugo_Kanno, или написать в анонимные сообщения: "
-        "http://t.me/anonaskbot?start=DEeCvyqIwnnLdNB"
+        "Появились вопросы? Вы можете задать их @Yugo_Kanno, или написать в анонимные сообщения:\n"
+        "<blockquote>http://t.me/anonaskbot?start=DEeCvyqIwnnLdNB</blockquote>"
     )
-    await message.answer(help_text, reply_markup=main_menu_keyboard)
+    await message.answer(help_text, parse_mode="HTML", reply_markup=main_menu_keyboard)
 
 @dp.message(F.text == "💡 Предложение")
 async def show_suggestion(message: Message):
+    if message.chat.type != "private":
+        return
+
     suggestion_text = (
-        "Появились вопросы? Вы можете задать их @Yugo_Kanno, или написать в анонимные сообщения: "
-        "http://t.me/anonaskbot?start=DEeCvyqIwnnLdNB"
+        "Появились вопросы? Вы можете задать их @Yugo_Kanno, или написать в анонимные сообщения:\n"
+        "<blockquote>http://t.me/anonaskbot?start=DEeCvyqIwnnLdNB</blockquote>"
     )
-    await message.answer(suggestion_text, reply_markup=main_menu_keyboard)
+    await message.answer(suggestion_text, parse_mode="HTML", reply_markup=main_menu_keyboard)
 
 @dp.message(F.text == "🔙 Меню")
 async def back_to_menu(message: Message):
