@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sqlite3
+import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message,
@@ -9,52 +10,51 @@ from aiogram.types import (
     ReplyKeyboardRemove
 )
 
-# Вставьте токен вашего бота от @BotFather
-import os
+# Токен берется из защищенных переменных окружения Render
 TOKEN = os.environ.get("BOT_TOKEN")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ==================== КЛАВИАТУРЫ ====================
+# ----------------- КЛАВИАТУРЫ -----------------
 
-# Главное меню (как на первом скриншоте)
+# Главное меню
 main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📊 Статистика каналов")],
-        [KeyboardButton(text="💖 Поддержка и реклама")],
-        [KeyboardButton(text="💬 Помощь"), KeyboardButton(text="💡 Предложение")]
+        [KeyboardButton(text="❤️ Поддержка и реклама")],
+        [KeyboardButton(text="💡 Помощь"), KeyboardButton(text="💡 Предложение")]
     ],
     resize_keyboard=True
 )
 
-# Меню выбора каналов (как на втором скриншоте)
-# В реальной работе список каналов подтягивается из базы данных, где бот фиксирует активность
+# Функция для генерации списка каналов из базы данных
 def get_channels_keyboard(channels_list):
     keyboard_builder = []
-    
-    # Добавляем кнопки каналов (по 2 в ряд для красоты)
     row = []
+    
     for chat_id, title in channels_list:
         row.append(KeyboardButton(text=f"📢 {title}"))
         if len(row) == 2:
             keyboard_builder.append(row)
             row = []
+            
     if row:
         keyboard_builder.append(row)
         
-жеб # Дополнительные служебные кнопки
+    # Дополнительные служебные кнопки
     keyboard_builder.append([KeyboardButton(text="🔄 Обновить список")])
-    keyboard_builder.append([KeyboardButton(text="⬅️ Меню")])
+    keyboard_builder.append([KeyboardButton(text="🔙 Меню")])
     
     return ReplyKeyboardMarkup(keyboard=keyboard_builder, resize_keyboard=True)
 
 
-# ==================== БАЗА ДАННЫХ ====================
+# ----------------- БАЗА ДАННЫХ -----------------
 
 def init_db():
     conn = sqlite3.connect("bot_stats.db")
     cursor = conn.cursor()
+    
     # Таблица для хранения каналов, куда добавлен бот
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS channels (
@@ -62,7 +62,8 @@ def init_db():
             title TEXT
         )
     """)
-    # Таблица для статистики пересылок/постов
+    
+    # Таблица для статистики пересылки постов
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS posts_stats (
             chat_id INTEGER,
@@ -96,7 +97,7 @@ def get_user_channels():
     return channels
 
 
-# ==================== ОБРАБОТЧИКИ СОБЫТИЙ В КАНАЛЕ ====================
+# ----------------- ОБРАБОТЧИК СОБЫТИЙ В КАНАЛЕ -----------------
 
 @dp.channel_post()
 async def track_channel_posts(post: Message):
@@ -108,45 +109,44 @@ async def track_channel_posts(post: Message):
     
     # Сохраняем канал в базу при любой публикации
     save_channel_to_db(chat_id, chat_title)
-
+    
     # Определяем автора по подписи
     if post.author_signature:
         author_name = post.author_signature
     else:
         author_name = "От лица канала"
-
+        
     # Сохраняем статистику поста
     save_post_to_db(chat_id, author_name)
 
 
-# ==================== ОБРАБОТЧИКИ СООБЩЕНИЙ В ЛИЧКЕ БОТА ====================
+# ----------------- ОБРАБОТЧИК СООБЩЕНИЙ В ЛИЧКЕ БОТА -----------------
 
 @dp.message(F.text == "/start")
 async def cmd_start(message: Message):
     if message.chat.type != "private":
         return
-    
+
     welcome_text = (
-        "👋 Привет! Я считаю, сколько постов опубликовал каждый админ твоих каналов.\n\n"
+        "🔥 Привет! Я считаю, сколько постов опубликовал каждый админ твоих каналов.\n\n"
         "<b>Как подключить канал:</b>\n"
-        "1️⃣ Добавь меня в канал админом\n"
-        "2️⃣ Включи в канале «Подписывать сообщения» — иначе я не вижу автора\n"
-        "3️⃣ Всё — новые посты считаются сами\n\n"
-        "Считаются только то посты, опубликованные после добавления бота. Посты без подписи идут как «От лица канала»."
+        "• Добавь меня в канал администратором.\n"
+        "• Включи в канале «Подписывать сообщения» — иначе я не вижу автора!\n"
+        "• Всё — новые посты считаются сами.\n\n"
+        "<i>Считаются только посты, опубликованные после добавления бота. Посты без подписи идут как «От лица канала».</i>"
     )
     await message.answer(welcome_text, parse_mode="HTML", reply_markup=main_menu_keyboard)
-
 
 @dp.message(F.text == "📊 Статистика каналов")
 async def show_channels_menu(message: Message):
     if message.chat.type != "private":
         return
-    
+
     channels = get_user_channels()
-    
+
     if not channels:
         await message.answer(
-            "📂 У меня пока нет данных ни по одному каналу.\n"
+            "📭 У меня пока нет данных ни по одному каналу.\n\n"
             "Убедитесь, что вы добавили меня в канал администратором и там появились новые посты.",
             reply_markup=main_menu_keyboard
         )
@@ -154,62 +154,56 @@ async def show_channels_menu(message: Message):
 
     keyboard = get_channels_keyboard(channels)
     await message.answer(
-        f"📊 <b>Выбери канал</b>\nДоступно каналов: {len(channels)}",
+        f"<b>Выбери канал:</b>\nДоступно каналов: {len(channels)}",
         parse_mode="HTML",
         reply_markup=keyboard
     )
 
-
-@dp.message(F.text == "💖 Поддержка и реклама")
+@dp.message(F.text == "❤️ Поддержка и реклама")
 async def show_support(message: Message):
     if message.chat.type != "private":
         return
-    
+
     support_text = (
-        "Я рада, что вы хотите поддержать проект!! "
+        "❤️ Я рад, что вы хотите поддержать проект!\n\n"
         "В качестве поддержки, вы можете отправить любое количество звезд данному человеку: @Yugo_Kanno"
     )
     await message.answer(support_text, reply_markup=main_menu_keyboard)
 
-
-@dp.message(F.text == "💬 Помощь")
+@dp.message(F.text == "💡 Помощь")
 async def show_help(message: Message):
     await message.answer("По всем вопросам обращайтесь к разработчику: @Yugo_Kanno", reply_markup=main_menu_keyboard)
-
 
 @dp.message(F.text == "💡 Предложение")
 async def show_suggestion(message: Message):
     await message.answer("Вы можете написать свои идеи и предложения разработчику: @Yugo_Kanno", reply_markup=main_menu_keyboard)
 
-
-@dp.message(F.text == "⬅️ Меню")
+@dp.message(F.text == "🔙 Меню")
 async def back_to_menu(message: Message):
     await message.answer("Главное меню:", reply_markup=main_menu_keyboard)
-
 
 @dp.message(F.text == "🔄 Обновить список")
 async def refresh_channels(message: Message):
     await show_channels_menu(message)
-
 
 # Обработка нажатия на конкретный канал из списка
 @dp.message(F.text.startswith("📢 "))
 async def show_channel_stats(message: Message):
     if message.chat.type != "private":
         return
-    
+
     channel_title = message.text.replace("📢 ", "").strip()
-    
+
     # Здесь бот может выводить статистику по выбранному каналу
     await message.answer(
-        f"📈 Статистика для канала: <b>{channel_title}</b>\n\n"
+        f"📊 <b>Статистика для канала:</b> <b>{channel_title}</b>\n\n"
         f"<i>(Здесь будет детальная статистика за неделю/месяц и кнопки выбора периодов)</i>",
         parse_mode="HTML",
         reply_markup=main_menu_keyboard
     )
 
 
-# ==================== ЗАПУСК БОТА ====================
+# ----------------- ЗАПУСК БОТА -----------------
 
 async def main():
     init_db()
