@@ -10,7 +10,8 @@ from aiogram.types import (
 )
 
 # Вставьте токен вашего бота от @BotFather
-TOKEN = "9263342481:AAEBlq-BZylvxO3Yo2LlWRKGPURW7SNkM_8"
+import os
+TOKEN = os.environ.get("BOT_TOKEN")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
