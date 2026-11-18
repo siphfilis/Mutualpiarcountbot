@@ -1,272 +1,237 @@
 import asyncio
 import logging
 import sqlite3
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.enums import ChatMemberStatus, ChatType
-from aiogram.filters import CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
+import os
+from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     Message,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove
 )
 
-# Вставь сюда токен своего бота
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = os.environ.get("BOT_TOKEN")
 
-router = Router()
-db_connection = sqlite3.connect("bot_stats.db", check_same_thread=False)
-cursor = db_connection.cursor()
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
-# Инициализация базы данных
-cursor.execute(
-    """
-CREATE TABLE IF NOT EXISTS posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER,
-    chat_title TEXT,
-    author_name TEXT,
-    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+# ----------------- КЛАВИАТУРЫ -----------------
+
+main_menu_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📊 Статистика каналов")],
+        [KeyboardButton(text="❤️ Поддержка и реклама")],
+        [KeyboardButton(text="💡 Помощь"), KeyboardButton(text="💡 Предложение")]
+    ],
+    resize_keyboard=True
 )
-"""
-)
-db_connection.commit()
+
+def get_channels_keyboard(channels_list):
+    keyboard_builder = []
+    row = []
+    
+    for chat_id, title in channels_list:
+        row.append(KeyboardButton(text=f"📢 {title}"))
+        if len(row) == 2:
+            keyboard_builder.append(row)
+            row = []
+            
+    if row:
+        keyboard_builder.append(row)
+        
+    keyboard_builder.append([KeyboardButton(text="🔄 Обновить список")])
+    keyboard_builder.append([KeyboardButton(text="🔙 Меню")])
+    
+    return ReplyKeyboardMarkup(keyboard=keyboard_builder, resize_keyboard=True)
 
 
-# --- ХРАНИЛИЩЕ / КЛАВИАТУРЫ ---
+# ----------------- БАЗА ДАННЫХ -----------------
+
+def init_db():
+    conn = sqlite3.connect("bot_stats.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS channels (
+            chat_id INTEGER PRIMARY KEY,
+            title TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS posts_stats (
+            chat_id INTEGER,
+            author_name TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def save_channel_to_db(chat_id: int, title: str):
+    conn = sqlite3.connect("bot_stats.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO channels (chat_id, title) VALUES (?, ?)", (chat_id, title))
+    conn.commit()
+    conn.close()
+
+def save_post_to_db(chat_id: int, author_name: str):
+    conn = sqlite3.connect("bot_stats.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO posts_stats (chat_id, author_name) VALUES (?, ?)", (chat_id, author_name))
+    conn.commit()
+    conn.close()
+
+def get_user_channels():
+    conn = sqlite3.connect("bot_stats.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT chat_id, title FROM channels")
+    channels = cursor.fetchall()
+    conn.close()
+    return channels
+
+def get_channel_stats(chat_id: int):
+    conn = sqlite3.connect("bot_stats.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT author_name, COUNT(*) FROM posts_stats WHERE chat_id = ? GROUP BY author_name", (chat_id,))
+    stats = cursor.fetchall()
+    conn.close()
+    return stats
 
 
-def get_main_keyboard():
-  return InlineKeyboardMarkup(
-      inline_keyboard=[
-          [
-              InlineKeyboardButton(
-                  text="📊 Статистика каналов", callback_data="channels_list"
-              )
-          ],
-          [
-              InlineKeyboardButton(
-                  text="⭐ Поддержать разработку", callback_data="support"
-              )
-          ],
-      ]
-  )
+# ----------------- ОБРАБОТЧИК СОБЫТИЙ В КАНАЛЕ -----------------
+
+@dp.channel_post()
+async def track_channel_posts(post: Message):
+    chat_id = post.chat.id
+    chat_title = post.chat.title or "Без названия"
+    
+    save_channel_to_db(chat_id, chat_title)
+    
+    if post.author_signature:
+        author_name = post.author_signature
+    else:
+        author_name = "От лица канала"
+        
+    save_post_to_db(chat_id, author_name)
 
 
-def get_periods_keyboard(chat_id: int):
-  return InlineKeyboardMarkup(
-      inline_keyboard=[
-          [
-              InlineKeyboardButton(
-                  text="День", callback_data=f"stat_{chat_id}_day"
-              ),
-              InlineKeyboardButton(
-                  text="Неделя", callback_data=f"stat_{chat_id}_week"
-              ),
-          ],
-          [
-              InlineKeyboardButton(
-                  text="Месяц", callback_data=f"stat_{chat_id}_month"
-              ),
-              InlineKeyboardButton(
-                  text="Всё время", callback_data=f"stat_{chat_id}_all"
-              ),
-          ],
-          [
-              InlineKeyboardButton(
-                  text="« Назад к каналам", callback_data="channels_list"
-              )
-          ],
-      ]
-  )
+# ----------------- ОБРАБОТЧИК СООБЩЕНИЙ В ЛИЧКЕ БОТА -----------------
 
-
-# --- ХОНДЛЕРЫ (ОБРАБОТЧИКИ) ---
-
-
-@router.message(CommandStart())
+@dp.message(F.text == "/start")
 async def cmd_start(message: Message):
-  text = (
-      "Данный бот создан для подсчета вп в каналах.\n"
-      "«(ЦИТИРОВАНИЕ) own - штурвал»\n\n"
-      "Чтобы я мог считать посты, сделай следующее:\n"
-      "1. Добавь бота в администраторы канала\n"
-      '2. Включи в канале "подписывать сообщения", иначе я не вижу авторов\n'
-      "3. Всё!! Новые посты будут считаться сами.\n\n"
-      "«(ЦИТИРОВАНИЕ) считаются только те посты, которые отправлены после"
-      " добавления бота как администратора.»"
-  )
-  await message.answer(text, reply_markup=get_main_keyboard())
+    if message.chat.type != "private":
+        return
 
-
-@router.callback_query(F.data == "support")
-async def process_support(callback: CallbackQuery):
-  text = (
-      "Я рада, что вы хотите поддержать проект!! В качестве поддержки, вы"
-      " можете отправить любое количество звезд данному человеку: @Yugo_Kanno"
-  )
-  await callback.message.edit_text(text, reply_markup=get_main_keyboard())
-  await callback.answer()
-
-
-@router.callback_query(F.data == "channels_list")
-async def process_channels_list(callback: CallbackQuery):
-  user_id = callback.from_user.id
-  bot_obj = callback.bot
-
-  # В реальном приложении здесь лучше хранить привязку каналов к пользователю в БД,
-  # но для примера пройдемся по сохраненным в базе уникальным каналам, где бот админ.
-  cursor.execute(
-      "SELECT DISTINCT chat_id, chat_title FROM posts"
-  )  # Упрощенный вариант для демонстрации
-  channels = cursor.fetchall()
-
-  keyboard_buttons = []
-
-  for chat_id, chat_title in channels:
-    try:
-      # Проверяем, является ли пользователь админом в этом канале
-      member = await bot_obj.get_chat_member(chat_id, user_id)
-      if member.status in [
-          ChatMemberStatus.ADMINISTRATOR,
-          ChatMemberStatus.CREATOR,
-      ]:
-        keyboard_buttons.append([
-            InlineKeyboardButton(
-                text=chat_title, callback_data=f"channel_{chat_id}"
-            )
-        ])
-    except Exception:
-      pass
-
-  keyboard_buttons.append(
-      [InlineKeyboardButton(text="« Главное меню", callback_data="main_menu")]
-  )
-
-  if not keyboard_buttons or len(keyboard_buttons) == 1:
-    text = (
-        "У тебя пока нет каналов, где мы вместе с тобой являемся"
-        " администраторами, или бот еще не зафиксировал посты."
+    welcome_text = (
+        "Я считаю, сколько постов опубликовал каждый админ твоих каналов.\n"
+        "Как подключить канал:\n"
+        "1. Добавь меня в канал администратором\n"
+        "2. Включи в канале «Подписывать сообщения» - иначе я не вижу автора\n"
+        "• Все - новые посты считаются сами\n\n"
+        "Считаются только посты, опубликованные после добавления бота. Посты без подписи идут как \"От лица канала\"\n\n"
+        "Бот делается одним человеком с помощью ии, я вообще нихуя не разбираюсь в кодах, но у меня нет возможности платить людям за разработку и помощь😭. Так что некоторое время бот будет сырым, если я вообще не забью хуй на его разработку.\n\n"
+        "OWNER - штурвал"
     )
-  else:
-    text = "Выбери канал для просмотра статистики:"
+    await message.answer(welcome_text, reply_markup=main_menu_keyboard)
 
-  await callback.message.edit_text(
-      text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-  )
-  await callback.answer()
+@dp.message(F.text == "📊 Статистика каналов")
+async def show_channels_menu(message: Message):
+    if message.chat.type != "private":
+        return
+
+    channels = get_user_channels()
+
+    if not channels:
+        await message.answer(
+            "...у меня пока нет данных ни по одному каналу.\n"
+            "Убедитесь, что вы добавили бота в канал, выдали ему права администратора и в нем появились новые посты.",
+            reply_markup=main_menu_keyboard
+        )
+        return
+
+    keyboard = get_channels_keyboard(channels)
+    await message.answer(
+        f"<b>Выбери канал:</b>\nДоступно каналов: {len(channels)}",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+@dp.message(F.text == "❤️ Поддержка и реклама")
+async def show_support(message: Message):
+    if message.chat.type != "private":
+        return
+
+    support_text = (
+        "В качестве поддержки, вы можете отправить любое количество звезд данному человеку: @Yugo_Kanno\n"
+        "Все отправленные звезды идут на поддержку бота!"
+    )
+    await message.answer(support_text, reply_markup=main_menu_keyboard)
+
+@dp.message(F.text == "💡 Помощь")
+async def show_help(message: Message):
+    help_text = (
+        "Появились вопросы? Вы можете задать их @Yugo_Kanno, или написать в анонимные сообщения: "
+        "http://t.me/anonaskbot?start=DEeCvyqIwnnLdNB"
+    )
+    await message.answer(help_text, reply_markup=main_menu_keyboard)
+
+@dp.message(F.text == "💡 Предложение")
+async def show_suggestion(message: Message):
+    suggestion_text = (
+        "Появились вопросы? Вы можете задать их @Yugo_Kanno, или написать в анонимные сообщения: "
+        "http://t.me/anonaskbot?start=DEeCvyqIwnnLdNB"
+    )
+    await message.answer(suggestion_text, reply_markup=main_menu_keyboard)
+
+@dp.message(F.text == "🔙 Меню")
+async def back_to_menu(message: Message):
+    await message.answer("Главное меню:", reply_markup=main_menu_keyboard)
+
+@dp.message(F.text == "🔄 Обновить список")
+async def refresh_channels(message: Message):
+    await show_channels_menu(message)
+
+@dp.message(F.text.startswith("📢 "))
+async def show_channel_stats(message: Message):
+    if message.chat.type != "private":
+        return
+
+    channel_title = message.text.replace("📢 ", "").strip()
+
+    conn = sqlite3.connect("bot_stats.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT chat_id FROM channels WHERE title = ?", (channel_title,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        await message.answer("Не удалось найти данные по этому каналу в базе.", reply_markup=main_menu_keyboard)
+        return
+
+    chat_id = row[0]
+    stats = get_channel_stats(chat_id)
+
+    stats_text = ""
+    if not stats:
+        stats_text = "📭 В этом канале пока не зафиксировано постов после подключения бота."
+    else:
+        for author, count in stats:
+            stats_text += f"• <b>{author}</b>: {count} пост(ов)\n"
+
+    await message.answer(
+        f"📊 <b>Статистика для канала:</b> <b>{channel_title}</b>\n\n"
+        f"{stats_text}",
+        parse_mode="HTML",
+        reply_markup=main_menu_keyboard
+    )
 
 
-@router.callback_query(F.data == "main_menu")
-async def process_main_menu(callback: CallbackQuery):
-  text = "Главное меню:"
-  await callback.message.edit_text(text, reply_markup=get_main_keyboard())
-  await callback.answer()
-
-
-@router.callback_query(F.data.startswith("channel_"))
-async def process_channel_selected(callback: CallbackQuery):
-  chat_id = int(callback.data.split("_")[1])
-
-  # По умолчанию при клике показываем статистику за неделю (как вы и хотели)
-  await show_statistics(callback, chat_id, period="week")
-
-
-@router.callback_query(F.data.startswith("stat_"))
-async def process_period_selected(callback: CallbackQuery):
-  parts = callback.data.split("_")
-  chat_id = int(parts[1])
-  period = parts[2]
-
-  await show_statistics(callback, chat_id, period=period)
-
-
-async def show_statistics(callback: CallbackQuery, chat_id: int, period: str):
-  # Выбираем интервал времени для SQL
-  time_filter = ""
-  period_name = "за всё время"
-
-  if period == "day":
-    time_filter = "AND date >= datetime('now', '-1 day')"
-    period_name = "за день"
-  elif period == "week":
-    time_filter = "AND date >= datetime('now', '-7 days')"
-    period_name = "за неделю"
-  elif period == "month":
-    time_filter = "AND date >= datetime('now', '-30 days')"
-    period_name = "за месяц"
-
-  cursor.execute(
-      f"SELECT chat_title FROM posts WHERE chat_id = ? LIMIT 1", (chat_id,)
-  )
-  res = cursor.fetchone()
-  chat_title = res[0] if res else "Канал"
-
-  # Считаем посты по авторам за выбранный период
-  cursor.execute(
-      f"""
-        SELECT author_name, COUNT(*) as cnt 
-        FROM posts 
-        WHERE chat_id = ? {time_filter} 
-        GROUP BY author_name
-    """,
-      (chat_id,),
-  )
-  stats = cursor.fetchall()
-
-  stats_text = f"Статистика для канала: {chat_title} ({period_name})\n\n"
-  if not stats:
-    stats_text += "• Пока нет записей за этот период."
-  else:
-    for author, count in stats:
-      stats_text += f"• {author}: {count} пост{get_post_word(count)}\n"
-
-  await callback.message.edit_text(
-      stats_text, reply_markup=get_periods_keyboard(chat_id)
-  )
-  await callback.answer()
-
-
-def get_post_word(count: int) -> str:
-  # Функция для правильного склонения слова "пост"
-  if count % 10 == 1 and count % 100 != 11:
-    return ""
-  elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
-    return "а"
-  else:
-    return "ов"
-
-
-# Логика сбора постов из каналов
-@router.channel_post()
-async def collect_channel_posts(message: Message):
-  if message.chat.type in [ChatType.CHANNEL, ChatType.SUPERGROUP]:
-    # Проверяем наличие подписи автора (авторство)
-    if message.author_signature:
-      chat_id = message.chat.id
-      chat_title = message.chat.title or "Без названия"
-      author_name = message.author_signature
-
-      # Сохраняем в базу данных
-      cursor.execute(
-          "INSERT INTO posts (chat_id, chat_title, author_name) VALUES (?, ?,"
-          " ?)",
-          (chat_id, chat_title, author_name),
-      )
-      db_connection.commit()
-
+# ----------------- ЗАПУСК БОТА -----------------
 
 async def main():
-  logging.basicConfig(level=logging.INFO)
-  bot = Bot(token=TOKEN)
-  dp = Dispatcher(storage=MemoryStorage())
-  dp.include_router(router)
-
-  print("Бот запущен!")
-  await dp.start_polling(bot)
-
+    init_db()
+    logging.basicConfig(level=logging.INFO)
+    print("Бот успешно запущен!")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-  asyncio.run(main())
+    asyncio.run(main())
